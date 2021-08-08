@@ -64,7 +64,7 @@ class Sensor:
         e_sat           = 6.11 * math.pow(10.0, (7.5 * temperature / (237.7 + temperature)))
         vapor_pressure  = (humidity * e_sat) / 100
         abs_humidity    = 1000 * vapor_pressure * 100 / ((temperature + 273) * 461.5)
-        print('absHumidity={:6.2f} g/m^3')
+        print('absHumidity={:6.2f} g/m^3'.format(abs_humidity))
         number          = math.floor(abs_humidity * 256.0)
         return number
     
