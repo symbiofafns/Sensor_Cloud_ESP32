@@ -60,10 +60,11 @@ class Sensor:
             res_bool = False
         return res_bool, crc
     
-    def __sgp43_get_humidity_compensation_value(self,humidity,temperature):
+    def __sgp30_get_humidity_compensation_value(self,humidity,temperature):
         e_sat           = 6.11 * math.pow(10.0, (7.5 * temperature / (237.7 + temperature)))
         vapor_pressure  = (humidity * e_sat) / 100
         abs_humidity    = 1000 * vapor_pressure * 100 / ((temperature + 273) * 461.5)
+        print('absHumidity={:6.2f} g/m^3')
         number          = math.floor(abs_humidity * 256.0)
         return number
     
@@ -103,7 +104,20 @@ class Sensor:
                 self.__i2c_dev.writeto(self.SGP30_I2C_ADDR, bytes(self.SGP30_I2C_INIT_AIR_QUALITY_CMD))
             except OSError:
                 print('SGP30 Init Air Quality CMD No ACK')
-            
+
+    def __sgp30_set_humidity(self,compensation):
+        data      = bytearray(5)
+        data[0:2] = bytes(self.SGP30_I2C_SET_HUMIDITY_CMD)
+        data[2:4] = compensation.to_bytes(2, 'big')
+        res       = self.__sgp30_crc(False, data[2:4])
+        data[4]   = res[1]
+        try:
+            self.__i2c_dev.writeto(self.SGP30_I2C_ADDR, data)
+            return True
+        except OSError:
+            print('SGP30 Set Humidity Compensation CMD No ACK')
+            return False
+        
     def __init__(self, pin_scl, pin_sda):
         self.__temperature = -100
         self.__humidity    = -100
@@ -172,7 +186,7 @@ class Sensor:
             return True, int.from_bytes(data,"Big",False)
         except OSError:
             print('BH1750 Red No ACK')
-    
+
     def read_gas_value(self,humidity = None, temperature = None):
         #Gas Initial 
         if self.__gas_flag == False:
@@ -180,29 +194,19 @@ class Sensor:
             if res_bool == False:
                 return False, 0, 0
             time.sleep_ms(12)
-            #Set Measure Air Quality Command
-            try:
-                self.__i2c_dev.writeto(self.SGP30_I2C_ADDR, bytes(self.SGP30_I2C_MEASURE_AIR_QUALITY_CMD))
-            except OSError:
-                print('SGP30 Measure Air Quality CMD No ACK')
-                return False, 0, 0           
-            time.sleep_ms(12)
-        #Set Humidity Compensation Command
-        if humidity != None and temperature != None:
-            set_humidity  = self.__sgp43_get_humidity_compensation_value(humidity,temperature)
-            data          = bytearray(5)
-            data[0:2]     = bytes(self.SGP30_I2C_SET_HUMIDITY_CMD)
-            data[2:4]     = set_humidity.to_bytes(2,'big')
-            res_bool, crc = self.__sgp30_crc(False,data[3:5]) 
-            data[4]       = crc
-            print('array={},v1={:d},v2={:d}'.format(data,set_humidity,crc))
-            try:
-                self.__i2c_dev.writeto(self.SGP30_I2C_ADDR, data)
-            except OSError:
-                print('SGP30 Set Humidity Compensation CMD No ACK')
-                return False, 0, 0
-            print('Absolute Humidity={:d} g/m^3'.format(set_humidity))
-            time.sleep_ms(100)
+            #Set Humidity Compensation Command
+            if humidity != None and temperature != None:
+                set_value = self.__sgp30_get_humidity_compensation_value(humidity,temperature)
+                if self.__sgp30_set_humidity(set_value) == False:
+                    return False, 0, 0
+            time.sleep_ms(1000)
+        #Set Measure Air Quality Command
+        try:
+            self.__i2c_dev.writeto(self.SGP30_I2C_ADDR, bytes(self.SGP30_I2C_MEASURE_AIR_QUALITY_CMD))
+        except OSError:
+            print('SGP30 Measure Air Quality CMD No ACK')
+            return False, 0, 0           
+        time.sleep_ms(12)
         #Get Measure Air Quality Data
         try:
             data     = self.__i2c_dev.readfrom(self.SGP30_I2C_ADDR, 6)
@@ -216,7 +220,7 @@ class Sensor:
             tvoc = int.from_bytes(data[3:5],"Big",False)
             #Set Gas Flag
             if self.__gas_flag == False and res_bool == True:
-                self.__gas_flag = False
+                self.__gas_flag = True
             return res_bool, co2, tvoc
         except OSError:
             print('SGP30 Read No ACK')
@@ -228,19 +232,23 @@ class Sensor:
         if res_bool == True:
             self.__temperature = res_value1
             self.__humidity    = res_value2
+        time.sleep_ms(20)
         #Get Gas Value
-        if self.__gas_flag == False:
-            if res_bool == True:
-                res_bool, res_value1, res_value2 = self.read_gas_value()
-        else:
+        if self.__gas_flag == True:
             res_bool, res_value1, res_value2 = self.read_gas_value()        
+        else:
+            # Is Get Temperature & Humidity Success ?
+            if res_bool == True:
+                res_bool, res_value1, res_value2 = self.read_gas_value(self.__humidity,self.__temperature)
         if res_bool == True:
             self.__co2  = res_value1
             self.__tvoc = res_value2
+        time.sleep_ms(20)
         #Get Lumen Value
         res_bool, res_value1 = self.read_ambient_light_value()
         if res_bool == True:
-            self.__lumen = res_value1     
+            self.__lumen = res_value1
+        #Set Output string        
         string  = '{:4.1f}/{:4.1f}/{:d}/{:d}/{:d}'.format(self.__temperature, \
                                                           self.__humidity,    \
                                                           self.__lumen,       \
@@ -328,13 +336,13 @@ def main():
     #obj_cloud.connect_to_cloud()
     
     while True:
-        time.sleep(30)
+        time.sleep(10)
         #Get Sensor Value
         result = obj_sensor.get_result_value()
         print(result)
-#        if obj_cloud.upload_to_cloud(result) == False:
+#       if obj_cloud.upload_to_cloud(result) == False:
             #WiFi Connect
-#            obj_cloud.connect_to_cloud()
+#           obj_cloud.connect_to_cloud()
                     
 if __name__ == '__main__':
     main()
