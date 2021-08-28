@@ -1,14 +1,15 @@
 from machine import Pin, I2C
+from micropython import const
 import time, math, network, urequests
 
 class Sensor:
     # Sensor Define Value
-    AM2320_I2C_ADDR                         = 0x5C
+    AM2320_I2C_ADDR                         = const(0x5C)
     AM2320_I2C_WAKEUP_CMD                   = [0x00]
     AM2320_I2C_READ_CMD                     = [0x03,0x00,0x04]
-    BH1750_I2C_ADDR                         = 0x23
+    BH1750_I2C_ADDR                         = const(0x23)
     BH1750_I2C_ONE_TIME_HIGH_RES_MODE_CMD   = [0x20]
-    SGP30_I2C_ADDR                          = 0x58
+    SGP30_I2C_ADDR                          = const(0x58)
     SGP30_I2C_GET_SERIAL_ID_CMD             =[0x36,0x82]
     SGP30_I2C_INIT_AIR_QUALITY_CMD          =[0x20,0x03]
     SGP30_I2C_MEASURE_AIR_QUALITY_CMD       =[0x20,0x08]
@@ -54,7 +55,7 @@ class Sensor:
                     crc ^= 0x31
                 else:
                     crc <<= 1
-                crc &= 0xff
+            crc &= 0xff
         res_bool = True
         if check_enable == True and crc != 0:
             res_bool = False
@@ -118,13 +119,16 @@ class Sensor:
             print('SGP30 Set Humidity Compensation CMD No ACK')
             return False
         
-    def __init__(self, pin_scl, pin_sda):
-        self.__temperature = -100
-        self.__humidity    = -100
-        self.__lumen       = -100
+    def __init__(self, pin_scl=23, pin_sda=21):
+        self.__am2320_start_time = time.ticks_ms()
+        self.__bh1750_start_time = time.ticks_ms()
+        self.__sgp30_start_time  = time.ticks_ms()
+        self.initial_flag  = const(0x00)
+        self.__temperature = 0
+        self.__humidity    = 0
+        self.__lumen       = 0
         self.__co2         = 0
         self.__tvoc        = 0
-        self.__gas_flag    = False
         self.__i2c_dev     = I2C(0, scl=Pin(pin_scl), sda=Pin(pin_sda), freq=100000)
     
     def read_temperature_humidity_value(self):
@@ -188,17 +192,18 @@ class Sensor:
             print('BH1750 Red No ACK')
 
     def read_gas_value(self,humidity = None, temperature = None):
-        #Gas Initial 
-        if self.__gas_flag == False:
+        #Gas Initial
+        flag_value = self.initial_flag & 0x04 
+        if flag_value == 0x00:
             res_bool = self.__sgp30_init_air_quality()
             if res_bool == False:
                 return False, 0, 0
             time.sleep_ms(12)
-            #Set Humidity Compensation Command
-            if humidity != None and temperature != None:
-                set_value = self.__sgp30_get_humidity_compensation_value(humidity,temperature)
-                if self.__sgp30_set_humidity(set_value) == False:
-                    return False, 0, 0
+        #Set Humidity Compensation Command
+        if humidity != None and temperature != None:
+            set_value = self.__sgp30_get_humidity_compensation_value(humidity,temperature)
+            if self.__sgp30_set_humidity(set_value) == False:
+                return False, 0, 0
             time.sleep_ms(1000)
         #Set Measure Air Quality Command
         try:
@@ -218,9 +223,6 @@ class Sensor:
                     break
             co2  = int.from_bytes(data[0:2],"Big",False)
             tvoc = int.from_bytes(data[3:5],"Big",False)
-            #Set Gas Flag
-            if self.__gas_flag == False and res_bool == True:
-                self.__gas_flag = True
             return res_bool, co2, tvoc
         except OSError:
             print('SGP30 Read No ACK')
@@ -228,33 +230,51 @@ class Sensor:
    
     def get_result_value(self):
         #Get Temperature & Humidity
-        res_bool, res_value1, res_value2 = self.read_temperature_humidity_value()
-        if res_bool == True:
-            self.__temperature = res_value1
-            self.__humidity    = res_value2
-        time.sleep_ms(20)
-        #Get Gas Value
-        if self.__gas_flag == True:
-            res_bool, res_value1, res_value2 = self.read_gas_value()        
-        else:
-            # Is Get Temperature & Humidity Success ?
+        interval_time = time.ticks_diff(time.ticks_ms(), self.__am2320_start_time)
+        flag_value    = self.initial_flag & 0x01
+        if flag_value == 0 or interval_time > 30000:
+            res_bool, res_value1, res_value2 = self.read_temperature_humidity_value()
             if res_bool == True:
-                res_bool, res_value1, res_value2 = self.read_gas_value(self.__humidity,self.__temperature)
-        if res_bool == True:
-            self.__co2  = res_value1
-            self.__tvoc = res_value2
-        time.sleep_ms(20)
+                self.__temperature = res_value1
+                self.__humidity    = res_value2
+                self.initial_flag |= 0x01
+            time.sleep_ms(20)
+            self.__am2320_start_time = time.ticks_ms()
         #Get Lumen Value
-        res_bool, res_value1 = self.read_ambient_light_value()
-        if res_bool == True:
-            self.__lumen = res_value1
-        #Set Output string        
-        string  = '{:4.1f}/{:4.1f}/{:d}/{:d}/{:d}'.format(self.__temperature, \
-                                                          self.__humidity,    \
-                                                          self.__lumen,       \
-                                                          self.__co2,         \
-                                                          self.__tvoc)
-        result  = string.split('/')
+        interval_time = time.ticks_diff(time.ticks_ms(), self.__bh1750_start_time)
+        flag_value    = self.initial_flag & 0x02
+        if flag_value == 0 or interval_time > 30000:
+            res_bool, res_value1 = self.read_ambient_light_value()
+            if res_bool == True:
+                self.__lumen       = res_value1
+                self.initial_flag |= 0x02
+            time.sleep_ms(20)
+            self.__bh1750_start_time = time.ticks_ms()
+        #Get Gas Value
+        interval_time = time.ticks_diff(time.ticks_ms(), self.__sgp30_start_time)
+        flag_value    = self.initial_flag & 0x04
+        if flag_value == 0 or interval_time > 1000:
+            if self.__co2 > 0:
+                res_bool, res_value1, res_value2 = self.read_gas_value()
+            else:
+                if self.__temperature > 0 and self.__humidity > 0:
+                    res_bool, res_value1, res_value2 = self.read_gas_value(self.__humidity,\
+                                                                           self.__temperature)
+            if res_bool == True:
+                self.__co2         = res_value1
+                self.__tvoc        = res_value2
+                self.initial_flag |= 0x04
+            self.__sgp30_start_time = time.ticks_ms()
+        #Set Output string
+        result=[]
+        if self.__co2 > 0:
+            #Set Output string        
+            string  = '{:4.1f}/{:4.1f}/{:d}/{:d}/{:d}'.format(self.__temperature, \
+                                                              self.__humidity,    \
+                                                              self.__lumen,       \
+                                                              self.__co2,         \
+                                                              self.__tvoc)
+            result  = string.split('/')
         return result
 
 class ThingspeakCloud:
@@ -320,9 +340,7 @@ class ThingspeakCloud:
 
 def main():
     #Sensor Initial
-    I2C_SCL_PIN = 23
-    I2c_SDA_PIN = 21
-    obj_sensor  = Sensor(I2C_SCL_PIN, I2c_SDA_PIN)
+    obj_sensor  = Sensor()
     #Sensor Connect
     result = obj_sensor.get_result_value()
     print(result)
@@ -335,11 +353,13 @@ def main():
     #WiFi Connect
     #obj_cloud.connect_to_cloud()
     
+    start_time = time.ticks_ms()
     while True:
-        time.sleep(10)
         #Get Sensor Value
         result = obj_sensor.get_result_value()
-        print(result)
+        if time.ticks_diff(time.ticks_ms(), start_time) >= 30000:
+            start_time = time.ticks_ms()
+            print(result)
 #       if obj_cloud.upload_to_cloud(result) == False:
             #WiFi Connect
 #           obj_cloud.connect_to_cloud()
