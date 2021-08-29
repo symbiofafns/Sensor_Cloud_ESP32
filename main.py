@@ -1,4 +1,4 @@
-from machine import Pin, I2C
+from machine import Pin, I2C, SPI
 from micropython import const
 import time, math, network, urequests
 
@@ -338,7 +338,130 @@ class ThingspeakCloud:
         http_response.close()
         return res_bool
 
+class SSD1306:
+    SSD1306_SET_CONTRAST        = const(0x81)
+    SSD1306_SET_ENTIRE_ON       = const(0xA4)
+    SSD1306_SET_NORM_INV        = const(0xA6)
+    SSD1306_SET_DISP            = const(0xAE)
+    SSD1306_SET_MEM_ADDR        = const(0x20)
+    SSD1306_SET_COL_ADDR        = const(0x21)
+    SSD1306_SET_PAGE_ADDR       = const(0x22)
+    SSD1306_SET_DISP_START_LINE = const(0x40)
+    SSD1306_SET_SEG_REMAP       = const(0xA0)
+    SSD1306_SET_MUX_RATIO       = const(0xA8)
+    SSD1306_SET_IREF_SELECT     = const(0xAD)
+    SSD1306_SET_COM_OUT_DIR     = const(0xC0)
+    SSD1306_SET_DISP_OFFSET     = const(0xD3)
+    SSD1306_SET_COM_PIN_CFG     = const(0xDA)
+    SSD1306_SET_DISP_CLK_DIV    = const(0xD5)
+    SSD1306_SET_PRECHARGE       = const(0xD9)
+    SSD1306_SET_VCOM_DESEL      = const(0xDB)
+    SSD1306_SET_CHARGE_PUMP     = const(0x8D)
+    SSD1306_WIDTH               = const(128)
+    SSD1306_HEIGHT              = const(64)
+
+    def __write_cmd(self, cmd):
+        self.__gpio_cs.value(1)
+        self.__gpio_dc.value(0)
+        self.__gpio_cs.value(0)
+        self.__spi_dev.write(bytearray([cmd]))
+        self.__gpio_cs.value(1)
+
+    def __write_data(self, buf):
+        self.__gpio_cs.value(1)
+        self.__gpio_dc.value(1)
+        self.__gpio_cs.value(0)
+        self.__spi_dev.write(buf)
+        self.__gpio_cs.value(1)
+    
+    def __initial(self):
+        self.__write_cmd(self.SSD1306_SET_DISP)
+        # the suggested ratio 0x80
+        self.__write_cmd(self.SSD1306_SET_DISP_CLK_DIV)
+        self.__write_cmd(0x80)
+        self.__write_cmd(self.SSD1306_SET_MUX_RATIO)
+        self.__write_cmd(self.SSD1306_HEIGHT - 1)
+        # no offset
+        self.__write_cmd(self.SSD1306_SET_DISP_OFFSET)
+        self.__write_cmd(0x00)
+        # line #0
+        self.__write_cmd(self.SSD1306_SET_DISP_START_LINE | 0x00)
+        # display voltage from 3.3V
+        self.__write_cmd(self.SSD1306_SET_CHARGE_PUMP)
+        self.__write_cmd(0x14)
+        # act like ks0108
+        self.__write_cmd(self.SSD1306_SET_MEM_ADDR)
+        self.__write_cmd(0x00)
+        self.__write_cmd(self.SSD1306_SET_SEG_REMAP | 0x01)
+        self.__write_cmd(self.SSD1306_SET_COM_OUT_DIR | 0x08)
+        self.__write_cmd(self.SSD1306_SET_COM_PIN_CFG)
+        self.__write_cmd(0x12)
+        self.__write_cmd(self.SSD1306_SET_CONTRAST)
+        self.__write_cmd(0xCF)
+        self.__write_cmd(self.SSD1306_SET_PRECHARGE)
+        self.__write_cmd(0xF1)
+        self.__write_cmd(self.SSD1306_SET_VCOM_DESEL)
+        self.__write_cmd(0x40)
+        self.__write_cmd(self.SSD1306_SET_ENTIRE_ON)
+        self.__write_cmd(self.SSD1306_SET_NORM_INV)
+        # Stop scroll
+        self.__write_cmd(0x2E)
+        self.__write_cmd(self.SSD1306_SET_DISP | 0x01)
+
+    def __init__(self, pin_sck=18, pin_sda=22, pin_res=17, pin_dc=16, pin_cs=5):
+        self.__spi_dev  = SPI(2,                \
+                              baudrate=10000000,\
+                              polarity=0,       \
+                              phase=0,          \
+                              bits=8,           \
+                              firstbit=0,       \
+                              sck=Pin(pin_sck), mosi=Pin(pin_sda), miso=Pin(19))
+        self.__gpio_res = Pin(pin_res, Pin.OUT)
+        self.__gpio_res.value(0)
+        self.__gpio_dc  = Pin(pin_dc,  Pin.OUT)
+        self.__gpio_dc.value(0)
+        self.__gpio_cs  = Pin(pin_cs,  Pin.OUT)
+        self.__gpio_cs.value(1)
+        #Reset Device
+        self.__gpio_res.value(1)
+        time.sleep_ms(1)
+        self.__gpio_res.value(0)
+        time.sleep_ms(10)
+        self.__gpio_res.value(1)
+        #Initial
+        self.__initial()
+        print('Driver Initial OK!')
+    
+    def contrast(self, value):
+        self.__write_cmd(self.SSD1306_SET_CONTRAST)
+        self.__write_cmd(value)
+
+    def invert(self, value):
+        self.__write_cmd(self.SSD1306_SET_NORM_INV | (value & 1))
+
+    def rotate(self, value):
+        self.__write_cmd(self.SSD1306_SET_COM_OUT_DIR | ((value & 1) << 3))
+        self.__write_cmd(self.SSD1306_SET_SEG_REMAP   | (value & 1))
+
+    def draw(self, buf):
+        x0      = 0
+        x1      = self.SSD1306_WIDTH - 1
+        pages   = self.SSD1306_HEIGHT / 8
+        self.__write_cmd(self.SSD1306_SET_COL_ADDR)
+        self.__write_cmd(x0)
+        self.__write_cmd(x1)
+        self.__write_cmd(self.SSD1306_SET_PAGE_ADDR)
+        self.__write_cmd(0)
+        self.__write_cmd(pages)
+        self.__write_data(self.buf)
+
 def main():
+
+    
+    
+    while True:
+        time.sleep(1)
+
     #Sensor Initial
     obj_sensor  = Sensor()
     #Sensor Connect
